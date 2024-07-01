@@ -4,7 +4,13 @@ ANSI escape sequences were developed and standardized over 45 years ago (ANSI X3
 
 I'm proposing a new standard based on JSON, which is universally encodable and decodable, extensible, and human readable.
 
-In order to be backward compatible with the existing terminal escape codes, we'll implement JSON terminal escapes with an unused OSC code (proposed 23198 and 23199).  23198 will be used for programs that want to send commands/data to the terminal, and 23199 will be used by the terminal to send data and responses back to program.
+While I don't think it is possible (or desirable) to replace the existing ANSI escape sequences, I think using JSON escapes for _new_ terminal extensions going forward is a more sustainable approach.  This will allow both host programs, and terminal implementors a standard way to use or implement new terminal functionality without the need for writing new parsers or protocols that are specific to a specific extension.  It will also improve how terminal escapes are documented.  The existing VT100 ANSI escape codes are so old they defy our "modern" way of documenting APIs.  The information exists in various resources (Wikipedia, Github, source code, diagrams) and it is hard to create a single source of truth for what the full set of commands are, what all of the parameters mean, and what they should do.
+
+By using a "modern" format like JSON, we can created typed payloads, and real documentation that will help make the terminal more accessible (and extensible) in the years to come.
+
+## Protocol Overview
+
+In order to be backward compatible with the existing terminal escape codes, we'll implement JSON terminal escapes with an unused OSC code (proposed 23198 and 23199).  23198 will be used for programs to send commands/data to the terminal, and 23199 will be used by the terminal to send events, data, and responses back to program.
 
 `ESC ']' ('23198' | '23199') ';' <num-bytes> ';' <json-payload> ST`
 
@@ -21,8 +27,6 @@ ESC ']' '23199' ';' '0' ';' '{"command": "event:mouseclick", "data": {"row": 10,
 ```
 
 For terminal sequences produced by a program, setting "num-bytes" lets the consumer know how large of a buffer to allocate for parsing the command.  It will _not_ include the final ST byte, just the size of the JSON payload.  For commands produced by hand (or when it is inconvenient to know the full length of the JSON), the value '0' is allowed, which denotes a dynamic buffer size (parser should read until the final ST byte).
-
----
 
 ## JSON Command Format
 
@@ -73,6 +77,13 @@ Extensions beyond the vt100 set, like image protocols, or other advanced feature
 As part of Wave Terminal, I'm working on Go and TypeScript support for the parsing of these commands.  We can also submit a patch to xtermjs to support any commands that we standardize (as they should be compatible with the existing CSI/OSC commands that they already support).
 
 There is also work to be done on creating SDKs for implementing the RPC client/servers in various languages.  The RPC protocol is fairly simple and mostly trivial to implement.  The complications mostly arise from what language specific API should be used for streaming requests and responses.  Because the initial set of commands (the standard VT100 ones) will not require any request/response streaming, that feature can also be left out of the initial parser implementations.  One other thing to note is that the RPC protocol is symmetric.  The client can send requests, and the server can also send requests.  This is by design and allows us to implement terminal events (like keyboard, mouse, or other types of events) using the same JSON protocol.
+
+Lastly, we'll have to create a new "ncurses"-like library/SDK that allows host programs to take full advantage of the new capabilities and extensions.
+
+
+
+
+
 
 
 
