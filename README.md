@@ -2,7 +2,7 @@
 
 ANSI escape sequences were developed and standardized over 45 years ago (ANSI X3.64 standard in 1979).  Computing has changed, and with it, we need a new, more expressive, and more extensible way of communicating with the terminal.
 
-I'm proposing a new standard based on JSON, which is universally encodable and decodable, extensible, and human readable.
+I'm proposing a new standard based on JSON, which is universally encodable and decodable, extensible, and human readable.  We plan on using this protocol to implement advanced (and non-standard) escapes for [Wave Terminal](https://github.com/wavetermdev/waveterm).
 
 While I don't think it is possible (or desirable) to replace the existing ANSI escape sequences, I think using JSON escapes for _new_ terminal extensions going forward is a more sustainable approach.  This will allow both host programs, and terminal implementors a standard way to use or implement new terminal functionality without the need for writing new parsers or protocols that are specific to a specific extension.  It will also improve how terminal escapes are documented.  The existing VT100 ANSI escape codes are so old they defy our "modern" way of documenting APIs.  The information exists in various resources (Wikipedia, Github, source code, diagrams) and it is hard to create a single source of truth for what the full set of commands are, what all of the parameters mean, and what they should do.
 
@@ -12,18 +12,18 @@ By using a "modern" format like JSON, we can created typed payloads, and real do
 
 In order to be backward compatible with the existing terminal escape codes, we'll implement JSON terminal escapes with an unused OSC code (proposed 23198 and 23199).  23198 will be used for programs to send commands/data to the terminal, and 23199 will be used by the terminal to send events, data, and responses back to program.
 
-`ESC ']' ('23198' | '23199') ';' <num-bytes> ';' <json-payload> ST`
+`ESC ']' ('23198' | '23199') ';' <num-bytes> ';' <json-payload> BEL`
 
 Here are some example commands:
 
 ```
 // use OSC 23198 for commands sent from the program/shell to the terminal
-ESC ']' '23198' ';' '49' ';' '{"command": "term:cursormove", "data": {"y": -2}}' ST
-ESC ']' '23198' ';' '0' ';' '{"command": "term:setstyle", "data": {"color": 31, "bgcolor": "#aaaaaa", "bold": true}}' ST
-ESC ']' '23198' ';' '0' ';' '{"command": "term:resetstyle"}' ST
+ESC ']' '23198' ';' '49' ';' '{"command": "term:cursormove", "data": {"y": -2}}' BEL
+ESC ']' '23198' ';' '0' ';' '{"command": "term:setstyle", "data": {"color": 31, "bgcolor": "#aaaaaa", "bold": true}}' BEL
+ESC ']' '23198' ';' '0' ';' '{"command": "term:resetstyle"}' BEL
 
 // use OSC 23199 for commands being sent from the terminal
-ESC ']' '23199' ';' '0' ';' '{"command": "event:mouseclick", "data": {"row": 10, "col": 20}}' ST
+ESC ']' '23199' ';' '0' ';' '{"command": "event:mouseclick", "data": {"row": 10, "col": 20}}' BEL
 ```
 
 For terminal sequences produced by a program, setting "num-bytes" lets the consumer know how large of a buffer to allocate for parsing the command.  It will _not_ include the final ST byte, just the size of the JSON payload.  For commands produced by hand (or when it is inconvenient to know the full length of the JSON), the value '0' is allowed, which denotes a dynamic buffer size (parser should read until the final ST byte).
@@ -79,6 +79,44 @@ As part of Wave Terminal, I'm working on Go and TypeScript support for the parsi
 There is also work to be done on creating SDKs for implementing the RPC client/servers in various languages.  The RPC protocol is fairly simple and mostly trivial to implement.  The complications mostly arise from what language specific API should be used for streaming requests and responses.  Because the initial set of commands (the standard VT100 ones) will not require any request/response streaming, that feature can also be left out of the initial parser implementations.  One other thing to note is that the RPC protocol is symmetric.  The client can send requests, and the server can also send requests.  This is by design and allows us to implement terminal events (like keyboard, mouse, or other types of events) using the same JSON protocol.
 
 Lastly, we'll have to create a new "ncurses"-like library/SDK that allows host programs to take full advantage of the new capabilities and extensions.
+
+## FAQ
+
+**Why do we need a "data" attribute instead of having a flat JSON structure, especially for simple commands?**
+
+Initially I did plan on flattening out data, so commands could avoid another level of JSON.  But, the overhead is quite small (9 bytes), and it greatly simplifies the typing (programmatic typing) of the payloads, and allows for future extensibility of the protocol without worrying about reserving keys or creating "namespaces" for fields, etc.  It also simplifies the parsing of the data packets when writing SDKs and a clean separation of concerns where the top level is dealt with by the RPC layer exclusively and the data is dealt with by the implementation.
+
+**Why do we need two OSC escapes instead of sharing the same number for both direction?**
+
+Maybe we don't.  Open to the idea of simplifying down to one escape sequence number.  My concern was that when input echoing is on, the escape code sometimes leaks into the output, and if we store the output and say, reprocess it, we want to make sure not to have the output trigger another command.  Maybe this isn't a real concern since programs should be using raw mode anyway.
+
+**Why do we need an "RPC" protocol at all?**
+
+There are already terminal commands that expect output.  Right now that output must be synchronous, which prevents us from issuing longer running commands (async), or mixing multiple commands and making sure we assign the output to the correct command.  Also for advanced commands like uploading or downloading an image or a file, we really need streaming support in both direction, with the ability to asynchronously match responses to requests.  Imagine streaming a `tail -f` through an advanced command.  That command will run forever giving output.  The RPC mechanism makes sure we can support commands like that with no additional custom infrastructure required for clients/servers beyond the implementation of the RPC service that this spec provides.
+
+But, because the "rpcid" is optional, we also allow for efficient "fire-and-forget" commands (like most of the traditional vt100 stuff).  For moving the cursor, or changing a style we _don't_ want a response (both for overhead, and for cluttering up the output stream for clients who are not running the RPC stuff).  This gives us a nice mix of both worlds, where advanced clients implement the RPC protocol, but simple clients can just send commands, omit the rpcid and continue to use escape codes in the traditional way, except with more consistent syntax.
+
+**Do we need "data64"?**
+
+Maybe not.  Theoretically all of the unicode bytes that are allowed in a JSON string should not stop our OSC sequence.  So using just JSON string escapes we should be good until we hit the ST character.  But this made me nervous for binary files (especially for terminals which might not completely respect the spec).  Plus, JSON strings can be a bit weird for binary data, so having this out seemed safe.
+
+**Should we terminate with ST or BEL?**
+
+I like the idea of terminating with ST, but BEL should be more compatible everywhere so I believe it is the safer choice.
+
+**What about well defined error codes?**
+
+We could add an "errorcode" string field.  My thinking was to instead overload the "error" field with special syntax if you want to send an error code.  like "ECTIMEOUT: Request timed out".  If the error starts with "EC" + /[A-Z0-9]+/ then this is an error code and can be converted to specific errors in the clients and checked by the implementations.  People will feel different ways about encoding like this, but I believe this is simpler without adding an extra field.  This also lets simple clients not worry about supporting codes at first.
+
+**Multimodal Support**
+
+Using JSON for this API was also important for multimodal support.  Using JSON-lines (making sure the entire packet fits on one line), it is easy to send these commands to a special socket (without the OSC wrapper).  As JSON these commands can also be easily sent over websockets and HTTP requests as well.  In fact the same RPC client code can be used with different adapters for Terminal, Raw Socket, WebSocket, and HTTP requests (even named pipes, domain sockets, carrier pidgeon, etc.).  Wave Terminal even uses these internally within the backend to pass commands between different systems.
+
+## Authors / Copyright
+
+Copyright 2024
+
+* Michael Sawka -- Command Line Inc (Wave Terminal)
 
 
 
