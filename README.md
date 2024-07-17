@@ -39,9 +39,8 @@ Protocol Fields:
 * **timeout** -- (number) for commands with an "rpcid" this is the timeout for the command (milliseconds).  optional, if not present, there may be some default timeout.
 * **cont** -- (boolean) for either requests or responses.  setting "cont" to be true means that additional request packets (with the same rpcid) or additional response packets (with the same resid) are forthcoming.  these packets can have differing formats from the initial packet, and need not contain the same "command" field.  optional, if not present, assumed to be `false`.
 * **error** -- (string) for responses, indicates that an error has occurred (should not be combined with "cont".  generally an error indicates an end of the stream).  optional, if not present, indicates no error.
-* **datatype** -- (string).  optional type hint for the data.  this is never needed for initial command packets (as the initial command should be strongly typed).  we may need it as a hint for streaming requests or responses where the following packets might be part of a type union.  having this field in the protocol may help with efficiently decoding data (in some languages).  specifically for binary data the value "binary" is reserved (must be paired with data64).
+* **datatype** -- (string).  optional type hint for the data.  this is never needed for initial command packets (as the initial command should be strongly typed).  we may need it as a hint for streaming requests or responses where the following packets might be part of a type union.  having this field in the protocol may help with efficiently decoding data (in some languages).
 * **data** -- (any) the payload for the command, or the payload for the response.
-* **data64** -- (string) base64 encoded payload data.  When data64 is present, data should not be present.  We allow base64 encoding when the data might contain binary sequences that might be problematic for the terminal to read.  also when encoding binary data (like files or image data).  normally data64 should be base64 decoded and then JSON parsed.  if the "datatype" field is present, and set to "binary" then data64 is just to be base64 decoded (not JSON parsed) and passed as a byte-array (or language equivalent) to consumer.  
 
 ## Detecting Support / Capabilities
 
@@ -95,10 +94,6 @@ Maybe we don't.  Open to the idea of simplifying down to one escape sequence num
 There are already terminal commands that expect output.  Right now that output must be synchronous, which prevents us from issuing longer running commands (async), or mixing multiple commands and making sure we assign the output to the correct command.  Also for advanced commands like uploading or downloading an image or a file, we really need streaming support in both direction, with the ability to asynchronously match responses to requests.  Imagine streaming a `tail -f` through an advanced command.  That command will run forever giving output.  The RPC mechanism makes sure we can support commands like that with no additional custom infrastructure required for clients/servers beyond the implementation of the RPC service that this spec provides.
 
 But, because the "rpcid" is optional, we also allow for efficient "fire-and-forget" commands (like most of the traditional vt100 stuff).  For moving the cursor, or changing a style we _don't_ want a response (both for overhead, and for cluttering up the output stream for clients who are not running the RPC stuff).  This gives us a nice mix of both worlds, where advanced clients implement the RPC protocol, but simple clients can just send commands, omit the rpcid and continue to use escape codes in the traditional way, except with more consistent syntax.
-
-**Do we need "data64"?**
-
-Maybe not.  Theoretically all of the unicode bytes that are allowed in a JSON string should not stop our OSC sequence.  So using just JSON string escapes we should be good until we hit the ST character.  But this made me nervous for binary files (especially for terminals which might not completely respect the spec).  Plus, JSON strings can be a bit weird for binary data, so having this out seemed safe.
 
 **Should we terminate with ST or BEL?**
 
